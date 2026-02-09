@@ -1,31 +1,38 @@
-// Import the Pinecone library
-const { Pinecone } = require('@pinecone-database/pinecone')
+const { Pinecone } = require('@pinecone-database/pinecone');
 
-// Initialize a Pinecone client with your API key
-const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
+const pc = new Pinecone({
+  apiKey: process.env.PINECONE_API_KEY,
+});
 
-const astrologerAiIndex = pc.Index({ name: 'astrologerai' });
+const index = pc.index('astrologerai');
 
 async function createMemory({ vectors, metadata, messageId }) {
-    await astrologerAiIndex.upsert([ {
-        id: messageId,
+  await index.upsert({
+    records: [
+      {
+        id: messageId.toString(),
         values: vectors,
-        metadata
-    } ])
+        metadata: {
+          chat: String(metadata.chat),
+          user: String(metadata.user),
+          text: String(metadata.text),
+        },
+      },
+    ],
+  });
 }
-
 
 async function queryMemory({ queryVector, limit = 5, metadata }) {
+  const result = await index.query({
+    vector: queryVector,
+    topK: limit,
+    filter: {
+      user: String(metadata.user),
+    },
+    includeMetadata: true,
+  });
 
-    const data = await astrologerAiIndex.query({
-        vector: queryVector,
-        topK: limit,
-        filter: metadata ? metadata : undefined,
-        includeMetadata: true
-    })
-
-    return data.matches
-
+  return result.matches;
 }
 
-module.exports = { createMemory, queryMemory }
+module.exports = { createMemory, queryMemory };
