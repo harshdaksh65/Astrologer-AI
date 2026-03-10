@@ -1,5 +1,5 @@
-const app = require('./src/app');
 const dotenv = require('dotenv').config();
+const app = require('./src/app');
 const connectDb = require("./src/db/db");
 const initSocketServer = require('./src/sockets/socket.server');
 

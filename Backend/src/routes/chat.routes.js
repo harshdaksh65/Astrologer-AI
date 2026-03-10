@@ -11,5 +11,7 @@ router.get('/', authMiddleware.authUser, chatController.getChats)
 
 router.get('/messages/:id', authMiddleware.authUser, chatController.getMessages)
 
+router.post('/messages/:id', authMiddleware.authUser, chatController.sendMessage)
+
 
 module.exports = router;

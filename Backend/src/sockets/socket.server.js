@@ -5,6 +5,16 @@ const userModel = require("../models/user.model");
 const aiService = require("../services/ai.service");
 const messageModel = require("../models/message.model");
 const { createMemory, queryMemory } = require("../services/vector.service");
+const path = require("path");
+const knowledgeBase = require(path.join(__dirname, "../../data/KnowledgeBase.json"));
+
+function buildSystemPrompt(user) {
+    return knowledgeBase.systemPrompt
+        .replace("{{user_name}}", user.username || "Unknown")
+        .replace("{{user_birthplace}}", user.birthDetails?.place || "Unknown")
+        .replace("{{user_dob}}", user.birthDetails?.date ? new Date(user.birthDetails.date).toLocaleDateString("en-IN") : "Unknown")
+        .replace("{{user_time_of_birth}}", user.birthDetails?.time || "Unknown");
+}
 
 
 function initSocketServer(httpServer) {
@@ -39,25 +49,18 @@ function initSocketServer(httpServer) {
     io.on("connection", (socket) => {
         socket.on("ai-message", async (messagePayload) => {
         /* messagePayload = { chat:chatId,content:message text } */
-            const message = await messageModel.create({
-                chat: messagePayload.chat,
-                user: socket.user._id,
-                content: messagePayload.content,
-                role: "user"
-            })
-
-            const vectors = await aiService.generateVector(messagePayload.content);
+            const [ message, vectors ] = await Promise.all([
+                messageModel.create({
+                    chat: messagePayload.chat,
+                    user: socket.user._id,
+                    content: messagePayload.content,
+                    role: "user"
+                }),
+                aiService.generateVector(messagePayload.content),
+            ])
 
             console.log("Generated Vectors: ", vectors);
             console.log("Message ID: ", message._id);
-
-            const memory = await queryMemory({
-                queryVector: vectors,
-                limit: 3,
-                metadata: {
-                    user: socket.user._id
-                }
-            })
 
             await createMemory({
                 vectors,
@@ -70,26 +73,57 @@ function initSocketServer(httpServer) {
             })
 
 
-            const chatHistory = (await messageModel.find({
-                chat: messagePayload.chat
-            }).sort({ createdAt: -1 }).limit(20).lean()).reverse()
+            const [ memory, chatHistory ] = await Promise.all([
+
+                queryMemory({
+                    queryVector: vectors,
+                    limit: 3,
+                    metadata: {
+                        user: socket.user._id
+                    }
+                }),
+
+                messageModel.find({
+                    chat: messagePayload.chat
+                }).sort({ createdAt: -1 }).limit(20).lean().then(messages => messages.reverse())
+            ])
 
 
-            const response = await aiService.generateResponse(chatHistory.map(item => {
+            const stm = chatHistory.map(item => {
                 return {
                     role: item.role,
                     parts: [ { text: item.content } ]
                 }
-            }))
-
-            const responseMessage = await messageModel.create({
-                chat: messagePayload.chat,
-                user: socket.user._id,
-                content: response,
-                role: "model"
             })
 
-            const responseVectors = await aiService.generateVector(response)
+            const ltm = [
+                {
+                    role: "user",
+                    parts: [ {
+                        text: `
+
+                        these are some previous messages from the chat, use them to generate a response
+
+                        ${memory.map(item => item.metadata.text).join("\n")}
+                        
+                        ` } ]
+                }
+            ]
+
+
+            const systemPrompt = buildSystemPrompt(socket.user);
+            const response = await aiService.generateResponse([ ...ltm, ...stm ], systemPrompt)
+
+
+            const [responseVectors, responseMessage] = await Promise.all([
+                messageModel.create({
+                    chat: messagePayload.chat,
+                    user: socket.user._id,
+                    content: response,
+                    role: "model"
+                }),
+                aiService.generateVector(response)
+            ])
 
             await createMemory({
                 vectors: responseVectors,
